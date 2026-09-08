@@ -1,0 +1,4 @@
+module SharpDX {
+    header "sharpdx.h"
+    export *
+}

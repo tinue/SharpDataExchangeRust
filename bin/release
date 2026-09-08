@@ -1,0 +1,268 @@
+#!/bin/bash
+#
+# Release script for SharpDataExchangeRust.
+#
+# Unlike a local build, the actual cross-platform artifacts are produced by
+# .github/workflows/release.yml. This script's job is to run the local checks and
+# to push the tag that triggers that workflow — the workflow then builds every
+# platform and creates the GitHub release.
+#
+# Workflow:
+#
+#   1. Local build + test only (no git/GitHub interaction):
+#        bin/release --build-only
+#
+#   2. Pre-release (push a disposable "vX.Y.Z-pre" tag; CI publishes a GitHub
+#      pre-release you can re-cut as often as you like while iterating):
+#        bin/release
+#      Pre-conditions: not on main; no staged-but-uncommitted changes; branch is
+#      in sync with its remote; branch fast-forward-merges into main; CHANGELOG.md
+#      has an entry for the current version.
+#
+#   3. Full release (squash-merge branch -> main, tag "vX.Y.Z" on main; CI
+#      publishes the real GitHub release; the "-pre" tag/release is deleted):
+#        bin/release --release
+#      Pre-conditions: not on main; working tree clean; a "vX.Y.Z-pre" GitHub
+#      pre-release exists for this version.
+#
+# Append --dry-run to any invocation to preview state-changing actions.
+#
+# Prerequisites:  Rust toolchain, and for 2/3:  gh  (brew install gh; gh auth login)
+#
+
+set -euo pipefail
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+CHANGELOG="CHANGELOG.md"
+MAIN_BRANCH="main"
+
+VERSION=$(grep -m 1 '^version[[:space:]]*=' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "${VERSION:-}" ]; then
+    echo "Error: could not read version from Cargo.toml"
+    exit 1
+fi
+TAG="v$VERSION"
+PRE_TAG="v${VERSION}-pre"
+
+# ── Argument parsing ─────────────────────────────────────────────────────────────
+
+DO_BUILD_ONLY=false
+DO_RELEASE=false
+DRY_RUN=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --build-only) DO_BUILD_ONLY=true ;;
+        --release)    DO_RELEASE=true ;;
+        --dry-run)    DRY_RUN=true ;;
+        *) echo "Unknown argument: $arg"; exit 1 ;;
+    esac
+done
+
+if $DO_BUILD_ONLY && $DO_RELEASE; then
+    echo "Error: --build-only and --release are mutually exclusive."
+    exit 1
+fi
+
+run_cmd() {
+    if $DRY_RUN; then
+        echo "[dry-run] $*"
+    else
+        "$@"
+    fi
+}
+
+# ── Unstaged-changes helper ────────────────────────────────────────────────────
+#
+# Unstaged changes are the one pre-condition we recover from: offer to stash and
+# restore via the EXIT trap. Staged-but-uncommitted changes and unpushed commits
+# still hard-abort.
+
+STASHED=false
+restore_stash() {
+    if $STASHED; then
+        echo "Restoring stashed changes…"
+        git stash pop
+    fi
+}
+trap restore_stash EXIT
+
+stash_unstaged_changes() {
+    if ! git diff --quiet; then
+        echo "Unstaged changes present:"
+        git status --short
+        read -p "Stash them and restore after release finishes? (yes/no) " -r
+        if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+            echo "Aborted: commit or stash unstaged changes first."
+            exit 1
+        fi
+        run_cmd git stash push -m "bin/release autostash"
+        $DRY_RUN || STASHED=true
+    fi
+}
+
+changelog_notes() {
+    # Print the CHANGELOG section body for $VERSION, trimmed of blank
+    # leading/trailing lines (may be empty if there is no such section).
+    awk -v v="$VERSION" '
+        $0 ~ "^## \\[" v "\\]" { grab=1; next }
+        grab && (/^## / || /^\[[^][]+\]: /) { exit }
+        grab {
+            if (!started && $0 ~ /^[[:space:]]*$/) next
+            started = 1
+            buf = buf $0 "\n"
+        }
+        END {
+            sub(/\n+$/, "\n", buf)
+            printf "%s", buf
+        }
+    ' "$CHANGELOG"
+}
+
+# ── 1. Local build + test ──────────────────────────────────────────────────────
+
+echo "SharpDataExchange $VERSION  (tag: $TAG)"
+echo "Running local checks…"
+run_cmd cargo clippy --all-targets --all-features -- -D warnings
+run_cmd cargo build --release
+run_cmd cargo test
+
+if $DO_BUILD_ONLY; then
+    echo "Done.  Build-only: artifacts in target/release/"
+    exit 0
+fi
+
+# ── gh presence ───────────────────────────────────────────────────────────────
+
+if ! command -v gh &>/dev/null; then
+    echo "Error: 'gh' CLI not found. Install with: brew install gh"
+    exit 1
+fi
+
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# ── 3. Full release ───────────────────────────────────────────────────────────
+
+if $DO_RELEASE; then
+    if [ "$CURRENT_BRANCH" = "$MAIN_BRANCH" ]; then
+        echo "Error: --release must run from a development branch, not '$MAIN_BRANCH'."
+        exit 1
+    fi
+
+    stash_unstaged_changes
+    if ! git diff --cached --quiet; then
+        echo "Error: staged but uncommitted changes present. Commit them first."
+        git status --short
+        exit 1
+    fi
+
+    if ! gh release view "$PRE_TAG" &>/dev/null; then
+        echo "Error: no GitHub pre-release '$PRE_TAG'. Run 'bin/release' first."
+        exit 1
+    fi
+    if ! gh release view "$PRE_TAG" --json isPrerelease -q .isPrerelease | grep -q true; then
+        echo "Error: '$PRE_TAG' exists but is not a pre-release. Nothing to promote."
+        exit 1
+    fi
+
+    read -p "Have CHANGELOG.md and Cargo.toml version been finalized for $VERSION? (yes/no) " -r
+    if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+
+    NOTES=$(changelog_notes)
+    COMMIT_MSG="Release $TAG"
+    [ -n "$NOTES" ] && COMMIT_MSG="${COMMIT_MSG}"$'\n\n'"${NOTES}"
+
+    echo "Squash-merging $CURRENT_BRANCH into $MAIN_BRANCH…"
+    run_cmd git fetch origin "$MAIN_BRANCH" --quiet
+    run_cmd git checkout "$MAIN_BRANCH"
+    run_cmd git merge --ff-only "origin/$MAIN_BRANCH" || true
+    run_cmd git merge --squash "$CURRENT_BRANCH"
+    run_cmd git commit -m "$COMMIT_MSG"
+    run_cmd git push origin "$MAIN_BRANCH"
+
+    echo "Tagging $TAG on $MAIN_BRANCH (triggers the release workflow)…"
+    run_cmd git tag "$TAG"
+    run_cmd git push origin "$TAG"
+    run_cmd git checkout "$CURRENT_BRANCH"
+
+    echo "Removing pre-release $PRE_TAG…"
+    run_cmd gh release delete "$PRE_TAG" --yes --cleanup-tag
+
+    if $DRY_RUN; then
+        echo "Done.  [dry-run] No changes made."
+    else
+        echo "Done.  CI is building $TAG — watch it with:  gh run watch"
+    fi
+    exit 0
+fi
+
+# ── 2. Pre-release ────────────────────────────────────────────────────────────
+
+if [ "$CURRENT_BRANCH" = "$MAIN_BRANCH" ]; then
+    echo "Error: pre-release must run from a development branch, not '$MAIN_BRANCH'."
+    exit 1
+fi
+
+stash_unstaged_changes
+if ! git diff --cached --quiet; then
+    echo "Error: staged but uncommitted changes present. Commit them first."
+    git status --short
+    exit 1
+fi
+
+UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)
+if [ -z "$UPSTREAM" ]; then
+    echo "Error: branch '$CURRENT_BRANCH' has no upstream. Run: git push -u origin $CURRENT_BRANCH"
+    exit 1
+fi
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse "$UPSTREAM")" ]; then
+    AHEAD=$(git rev-list --count "${UPSTREAM}..HEAD")
+    if [ "$AHEAD" -gt 0 ]; then
+        echo "Error: $AHEAD unpushed commit(s) on '$CURRENT_BRANCH'. Push before releasing."
+    else
+        echo "Error: '$CURRENT_BRANCH' is behind '$UPSTREAM'. Pull before releasing."
+    fi
+    exit 1
+fi
+
+git fetch origin "$MAIN_BRANCH" --quiet
+MAIN_SHA=$(git rev-parse "origin/$MAIN_BRANCH")
+if [ "$(git merge-base HEAD "origin/$MAIN_BRANCH")" != "$MAIN_SHA" ]; then
+    echo "Error: '$CURRENT_BRANCH' cannot be fast-forward merged into $MAIN_BRANCH."
+    echo "  Merge or rebase onto $MAIN_BRANCH first:  git merge origin/$MAIN_BRANCH"
+    exit 1
+fi
+
+if [ ! -f "$CHANGELOG" ]; then
+    echo "Error: $CHANGELOG not found."
+    exit 1
+fi
+if [ -z "$(changelog_notes)" ]; then
+    echo "Error: no '## [$VERSION]' entry in $CHANGELOG. Add one before releasing."
+    exit 1
+fi
+
+echo ""
+echo "── Release notes for $PRE_TAG (from $CHANGELOG) ────────────"
+changelog_notes
+echo "──────────────────────────────────────────────────────────"
+echo ""
+read -p "Push tag '$PRE_TAG' at $(git rev-parse --short HEAD) and let CI publish the pre-release? (yes/no) " -r
+if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
+    echo "Aborted."
+    exit 1
+fi
+
+# -f: the -pre tag is disposable and moves to the latest pre-release commit.
+run_cmd git tag -f "$PRE_TAG"
+run_cmd git push -f origin "$PRE_TAG"
+
+if $DRY_RUN; then
+    echo "Done.  [dry-run] No changes made."
+else
+    echo "Done.  CI is building $PRE_TAG — watch it with:  gh run watch"
+fi

@@ -1,0 +1,112 @@
+//! Pure, content-driven conversion — the shared core behind the CLI and the C ABI.
+//! No filesystem access. Mirrors `SharpDataExchange.runConvert` / `encodeAsciiBasic`.
+
+use anyhow::{bail, Result};
+
+use crate::detect::{self, Content};
+use crate::registry::{Device, Registry};
+use crate::{abbrev, detokenize, header, scanner, text};
+
+/// Result of a conversion.
+#[derive(Debug)]
+pub struct ConvertOutcome {
+    /// The output bytes: a header + tokenized payload when tokenizing (unless
+    /// `with_header` was false), or a UTF-8 ASCII listing when de-tokenizing.
+    pub bytes: Vec<u8>,
+    /// What the input was detected as.
+    pub content: Content,
+    /// The device actually used (taken from the input header when de-tokenizing).
+    pub device: Device,
+}
+
+/// Convert `input`, choosing direction from its detected content.
+///
+/// * ASCII BASIC in  -> tokenized payload out (prefixed with the CE-158 / PC-1600
+///   serial header when `with_header`). `device` selects the keyword table + header;
+///   `name` supplies the CE-158 filename.
+/// * Tokenized BASIC in (with a CE-158 / PC-1600 header) -> ASCII listing out. The
+///   device is taken from the header; `device` and `name` are ignored.
+pub fn convert(
+    input: &[u8],
+    device: Device,
+    name: Option<&str>,
+    with_header: bool,
+) -> Result<ConvertOutcome> {
+    let content = detect::detect(input);
+    match content {
+        Content::AsciiBasic => {
+            let listing = text::decode_bas_listing(input);
+            if device == Device::Pc1500 {
+                if let Some((line, col, ch)) = text::first_non_ascii_for_pc1500(&listing) {
+                    bail!(
+                        "PC-1500 BASIC is 7-bit ASCII: line {line}, column {col} has U+{:04X} '{ch}'",
+                        ch as u32
+                    );
+                }
+            }
+            let reg = Registry::for_device(device);
+            let expanded = expand_all(&listing, reg);
+            let payload = scanner::tokenize(&expanded, reg)?;
+            let bytes = if with_header {
+                let mut out = header::build(device, name, payload.len());
+                out.extend_from_slice(&payload);
+                out
+            } else {
+                payload
+            };
+            Ok(ConvertOutcome { bytes, content, device })
+        }
+        Content::Ce158Basic | Content::Pc1600Basic => {
+            let h = header::find(input).expect("detect() guarantees a header here");
+            let payload = &input[h.payload_start()..];
+            let reg = Registry::for_device(h.device);
+            let listing = detokenize::detokenize_to_text(payload, reg)?;
+            Ok(ConvertOutcome { bytes: listing.into_bytes(), content, device: h.device })
+        }
+        Content::Unknown => bail!(
+            "convert only handles BASIC; got {}. A tokenized file must include a CE-158 or PC-1600 header.",
+            content.describe()
+        ),
+    }
+}
+
+fn expand_all(listing: &str, reg: &Registry) -> String {
+    let mut out = String::with_capacity(listing.len());
+    for (i, line) in listing.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&abbrev::expand(line, reg));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ascii_to_tokenized_and_back() {
+        let src = b"10 \"A\":CLEAR :WAIT\n20 GOTO 10\n";
+        let out = convert(src, Device::Pc1500, Some("t"), true).unwrap();
+        assert_eq!(out.content, Content::AsciiBasic);
+        assert_eq!(&out.bytes[0..5], &[0x01, 0x40, b'C', b'O', b'M']);
+
+        let back = convert(&out.bytes, Device::Pc1500, None, true).unwrap();
+        assert_eq!(back.content, Content::Ce158Basic);
+        assert_eq!(back.bytes, b"10 \"A\":CLEAR :WAIT\n20 GOTO 10\n");
+    }
+
+    #[test]
+    fn unknown_rejected() {
+        assert!(convert(b"just some prose here\n", Device::Pc1500, None, true).is_err());
+    }
+
+    #[test]
+    fn pc1500_rejects_non_ascii() {
+        let e = convert("10 PRINT \"\u{00dc}\"\n".as_bytes(), Device::Pc1500, None, true).unwrap_err();
+        assert!(e.to_string().contains("7-bit"));
+        // PC-1600 accepts it
+        assert!(convert("10 PRINT \"\u{00dc}\"\n".as_bytes(), Device::Pc1600, None, true).is_ok());
+    }
+}

@@ -1,0 +1,163 @@
+name: Release
+
+# Triggered by pushing a tag:
+#   vX.Y.Z-pre   -> GitHub *pre-release* (disposable, re-runnable; see bin/release)
+#   vX.Y.Z       -> full GitHub release
+#
+# Each platform job builds the `sde` CLI + the static and shared `libsharpdx`,
+# bundles them with include/ + docs into one archive, and uploads it. The final
+# job attaches every archive to the release.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-pre"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build a release for, e.g. v0.1.0"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-universal
+            os: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            archive: sharpdx-macos-universal.tar.gz
+            can-test: true
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            targets: x86_64-unknown-linux-gnu
+            archive: sharpdx-linux-x86_64.tar.gz
+            can-test: true
+          - name: linux-aarch64
+            os: ubuntu-22.04-arm
+            targets: aarch64-unknown-linux-gnu
+            archive: sharpdx-linux-aarch64.tar.gz
+            can-test: true
+          - name: windows-x86_64
+            os: windows-latest
+            targets: x86_64-pc-windows-msvc
+            archive: sharpdx-windows-x86_64.zip
+            can-test: true
+          - name: windows-aarch64
+            os: windows-latest
+            targets: aarch64-pc-windows-msvc
+            archive: sharpdx-windows-aarch64.zip
+            can-test: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: Test
+        if: matrix.can-test
+        run: cargo test --release
+
+      - name: Build
+        shell: bash
+        run: |
+          IFS=',' read -ra TS <<< "${{ matrix.targets }}"
+          for t in "${TS[@]}"; do
+            cargo build --release --target "$t"
+          done
+
+      - name: Package
+        shell: bash
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
+          TARGETS: ${{ matrix.targets }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: bash .github/scripts/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Resolve tag + notes
+        id: meta
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"; VERSION="${VERSION%-pre}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-pre ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Pull the matching CHANGELOG section, if any.
+          notes=$(awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { grab=1; next }
+            grab && (/^## / || /^\[[^][]+\]: /) { exit }
+            grab {
+              if (!started && $0 ~ /^[[:space:]]*$/) next
+              started = 1; buf = buf $0 "\n"
+            }
+            END { sub(/\n+$/, "\n", buf); printf "%s", buf }
+          ' CHANGELOG.md)
+          if [[ -z "${notes// }" ]]; then
+            notes="Release $TAG. See CHANGELOG.md."
+          fi
+          { echo "notes<<EOF"; echo "$notes"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Create / update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          NOTES: ${{ steps.meta.outputs.notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="SharpDataExchange $VERSION"
+          [[ "$PRERELEASE" == "true" ]] && title="$title (pre-release)"
+          flag=""
+          [[ "$PRERELEASE" == "true" ]] && flag="--prerelease"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            printf '%s\n' "$NOTES" | gh release edit "$TAG" --title "$title" --notes-file - $flag
+            gh release upload "$TAG" dist/* --clobber
+          else
+            printf '%s\n' "$NOTES" | gh release create "$TAG" dist/* \
+              --title "$title" --notes-file - $flag
+          fi
+          gh release view "$TAG" --json url -q .url

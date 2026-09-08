@@ -1,0 +1,193 @@
+//! ROM-style BASIC tokenizer: ASCII listing text -> tokenized payload bytes (no header).
+//!
+//! Single left-to-right pass per line, modelled on the PC-1500 ROM tokenizer
+//! (`TOK_INBUF` at `$F957`) rather than a grammar:
+//!
+//! 1. `'` (0x27) is discarded (cursor-control byte). A line that is only a line number
+//!    plus `'` therefore tokenizes to an empty body — the machine accepts it; the old
+//!    ANTLR path rejected it.
+//! 2. `"` toggles verbatim string mode; inside a string every byte (spaces included) is
+//!    copied through.
+//! 3. Spaces outside strings are dropped.
+//! 4. A byte `>= 0xE0` is treated as the lead of an already-tokenized 2-byte keyword and
+//!    copied through with the following byte.
+//! 5. `A..=Z` starts a greedy longest keyword match against the active registry. A hit
+//!    emits the 2-byte token; a miss stores the single letter and rescans from the next
+//!    character (so `FORMAT` used as a name would tokenize `FOR` + `MAT`, exactly as the
+//!    ROM does). Immediately after emitting `REM`, the rest of the line is copied
+//!    verbatim.
+//! 6. Everything else (digits, operators, `:` `;` `,` `#` `@`, high CP437 bytes) is
+//!    stored as its CP437 byte(s).
+//!
+//! Only upper-case `A..=Z` triggers keyword matching, matching the ROM (and the old
+//! grammar, whose keyword literals are upper-case).
+
+use anyhow::{bail, Result};
+
+use crate::cp437;
+use crate::registry::{Registry, REM_CODE};
+
+const CR: u8 = 0x0D;
+/// Max tokenized content bytes per line: the length prefix is a single byte and also
+/// counts the trailing `0x0D`, so `content + 1 <= 255`.
+const MAX_CONTENT: usize = 254;
+
+/// Tokenize a full ASCII BASIC listing. `source` must already have had dotted
+/// abbreviations expanded (see [`crate::abbrev`]); newlines may be `\n` or `\r\n`.
+pub fn tokenize(source: &str, reg: &Registry) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    for raw in source.split('\n') {
+        let line = raw.trim_start_matches([' ', '\t', '\r']);
+        // Column-0 `//` or `#` documentation comments are never sent to the device.
+        if line.starts_with("//") || line.starts_with('#') {
+            continue;
+        }
+        let digits_end = line.find(|c: char| !c.is_ascii_digit()).unwrap_or(line.len());
+        if digits_end == 0 {
+            // No line number -> unnumbered content is dropped (matches the Java encoder).
+            continue;
+        }
+        let line_no = (line[..digits_end].parse::<u64>().unwrap_or(0) & 0xFFFF) as u16;
+        let rest = &line[digits_end..];
+
+        let content = scan_line(rest, reg);
+        if content.len() > MAX_CONTENT {
+            bail!(
+                "line {line_no} is too long: {} tokenized bytes (max {MAX_CONTENT})",
+                content.len()
+            );
+        }
+        out.push((line_no >> 8) as u8);
+        out.push((line_no & 0xFF) as u8);
+        out.push((content.len() + 1) as u8);
+        out.extend_from_slice(&content);
+        out.push(CR);
+    }
+    Ok(out)
+}
+
+fn scan_line(rest: &str, reg: &Registry) -> Vec<u8> {
+    let bytes = cp437::encode_lossy(rest);
+    let mut content = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    let mut in_string = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if in_string {
+            content.push(b);
+            i += 1;
+            if b == 0x22 {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match b {
+            0x27 => i += 1,               // ' — discarded
+            0x20 => i += 1,               // space outside string — discarded
+            0x22 => {
+                content.push(b);
+                in_string = true;
+                i += 1;
+            }
+            0xE0..=0xFF => {
+                // Already-tokenized keyword lead byte: pass this and the next byte.
+                content.push(b);
+                i += 1;
+                if i < bytes.len() {
+                    content.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b'A'..=b'Z' => match reg.longest_keyword_prefix(&bytes[i..]) {
+                Some(kw) => {
+                    content.push((kw.code >> 8) as u8);
+                    content.push((kw.code & 0xFF) as u8);
+                    i += kw.name.len();
+                    if kw.code == REM_CODE {
+                        content.extend_from_slice(&bytes[i..]);
+                        i = bytes.len();
+                    }
+                }
+                None => {
+                    content.push(b);
+                    i += 1;
+                }
+            },
+            _ => {
+                content.push(b);
+                i += 1;
+            }
+        }
+    }
+    content
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry;
+
+    fn tok(src: &str) -> Vec<u8> {
+        tokenize(src, registry::pc1500()).unwrap()
+    }
+
+    #[test]
+    fn simple_line() {
+        // 10 "A":CLEAR :WAIT   ->  00 0A 0A 22 41 22 3A F1 87 3A F1 B3 0D
+        assert_eq!(
+            tok("   10 \"A\":CLEAR :WAIT \n"),
+            vec![0x00, 0x0A, 0x0A, 0x22, 0x41, 0x22, 0x3A, 0xF1, 0x87, 0x3A, 0xF1, 0xB3, 0x0D]
+        );
+    }
+
+    #[test]
+    fn glued_keyword_after_digit() {
+        // 90 FOR I=1TO B  ->  content F1 A5 49 3D 31 F1 B1 42
+        assert_eq!(
+            tok("90 FOR I=1TO B\n"),
+            vec![0x00, 0x5A, 0x09, 0xF1, 0xA5, 0x49, 0x3D, 0x31, 0xF1, 0xB1, 0x42, 0x0D]
+        );
+    }
+
+    #[test]
+    fn empty_quote_comment_is_empty_body_not_an_error() {
+        assert_eq!(tok("10 '\n"), vec![0x00, 0x0A, 0x01, 0x0D]);
+        assert_eq!(tok("10\n"), vec![0x00, 0x0A, 0x01, 0x0D]);
+    }
+
+    #[test]
+    fn rem_copies_rest_verbatim() {
+        // 10 REM FOR I  -> F1 AB then " FOR I" literal (FOR not tokenized)
+        let got = tok("10 REM FOR I\n");
+        assert_eq!(&got[..3], &[0x00, 0x0A, 0x09]);
+        assert_eq!(&got[3..], &[0xF1, 0xAB, b' ', b'F', b'O', b'R', b' ', b'I', 0x0D]);
+    }
+
+    #[test]
+    fn keyword_inside_string_is_literal() {
+        // 40 INPUT "REM. RATE (%)?";O
+        let got = tok("40 INPUT \"REM. RATE (%)?\";O\n");
+        // starts: line 40, then F0 91 (INPUT), then the quoted text verbatim
+        assert_eq!(&got[..5], &[0x00, 0x28, 0x15, 0xF0, 0x91]);
+        assert!(got.windows(4).any(|w| w == b"REM.")); // literal, not a token
+    }
+
+    #[test]
+    fn doc_comments_dropped() {
+        assert!(tok("// hello\n# also\n").is_empty());
+    }
+
+    #[test]
+    fn unnumbered_lines_dropped() {
+        assert_eq!(tok("PRINT 1\n20 END\n"), tok("20 END\n"));
+    }
+
+    #[test]
+    fn line_too_long_errors() {
+        let long = format!("10 {}\n", "\"x\";:".repeat(60)); // ~300 content bytes
+        assert!(tokenize(&long, registry::pc1500()).is_err());
+    }
+}

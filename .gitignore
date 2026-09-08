@@ -1,0 +1,5 @@
+/target
+/dist
+/sharpdx-*/
+/sharpdx-*.tar.gz
+/sharpdx-*.zip
