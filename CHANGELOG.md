@@ -1,9 +1,10 @@
 # Changelog
 
 All notable changes to this project are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the major
-version is `0`, the C ABI may change between minor versions.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project may contain
+breaking changes in every release, major or minor, until version 1.0.0 is reached
+(the C ABI and the Rust API included); from 1.0.0 on it follows
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 `bin/release` reads the section for the version being released and uses it as the
 GitHub release notes, so keep entries user-facing.

@@ -193,10 +193,11 @@ the failing call.
 
 ## Versioning and ABI stability
 
-The crate follows semver. While the major version is `0`, the C ABI may change
-between minor versions; `sde_version()` reports the build you linked. Pin an exact
-release. Once the project reaches `1.0`, the `sde_*` symbol set and the
-`Sde*` enum values become part of the stable ABI.
+This project may contain breaking changes in every release, major or minor, until
+version 1.0.0 is reached — that includes the C ABI (`sde_*` symbol set, `Sde*`
+enum values) and the Rust API. `sde_version()` reports the build you linked; pin
+an exact release. Once the project reaches `1.0.0` it follows semver and the
+`sde_*` ABI becomes stable.
 
 ## License
 

@@ -3,7 +3,7 @@
 Offline **tokenize / de-tokenize** of Sharp PC-1500 / PC-1600 BASIC — no Java
 runtime, a single self-contained binary. This is the Rust reimplementation of the
 `convert` verb from the Java
-[`SharpDataExchange`](../SharpDataExchange), with **byte-identical output** to the
+[`SharpDataExchange`](https://github.com/tinue/SharpDataExchange), with **byte-identical output** to the
 Java `convert` on the checked-in fixtures.
 
 Embedding this in your own application (C / C++ / Swift / Rust)? See
