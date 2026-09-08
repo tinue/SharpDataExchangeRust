@@ -28,8 +28,8 @@ support abbreviations. Same research as item 1, for the PC-1600:
 
 ## 3. GitHub Actions release matrix — DONE
 
-`.github/workflows/ci.yml` (fmt/clippy, keyword-drift, `cargo test` on the three
-native OSes, plus a cross-build sanity job for all five targets) and
+`.github/workflows/ci.yml` (clippy, advisory `cargo fmt --check`, `cargo test` on
+the three native OSes, plus a cross-build sanity job for all five targets) and
 `.github/workflows/release.yml` (tag-triggered: builds macOS universal + Linux
 x86_64/arm64 + Windows x64/arm64, bundles `sde` + `libsharpdx.{a,so,dylib,dll}` +
 `include/` + docs per platform, publishes the GitHub release). Releases are cut
@@ -42,3 +42,29 @@ Open follow-ups:
   `OWNER`).
 - Native Linux arm64 runners (`ubuntu-22.04-arm` / `ubuntu-24.04-arm`) are used;
   fall back to cross-compilation if those labels are ever unavailable.
+
+## 4. Tokenize CRLF-terminated input (real-world Windows `.bas` files)
+
+The scanner treats bytes literally, so a source listing with `\r\n` line endings
+produces an extra `0x0D` per line in the tokenized payload (this is what broke
+the Windows CI run before `.gitattributes` forced `eol=lf` on the fixtures — see
+commit 7ea066f).
+
+`.gitattributes` only fixes *this repo's checkout*. A real `.bas` file authored or
+edited on Windows will almost always have CR/LF endings — unless it was checked
+out from a repo that sets `text=auto eol=lf` *and* the editor honours it. So the
+CLI and the C ABI will mis-tokenize typical Windows input.
+
+Decide and implement:
+- **a) Where to normalize.** Strip a trailing `\r` from each line (and handle a
+  lone `\r` as a terminator?) at the entry of `convert()` for ASCII input, before
+  the scanner runs. Keep the verbatim/string states in mind — a `\r` inside a
+  quoted string or a `REM`/verbatim tail is almost certainly still junk to drop,
+  but confirm.
+- **b) Parity check.** Confirm the Java `SharpDataExchange` `convert` also
+  normalizes CR/LF (it very likely does, since it is used from Windows). If Java
+  keeps `\r`, document the deliberate divergence; if it strips, add a fixture
+  with CRLF endings to `tests/byte_parity.rs` so the behaviour is locked in.
+- **c) De-tokenize direction.** Output uses `\r` (`0x0D`) as the PC-1500 line
+  terminator; leave that as-is, but note whether a `--crlf` / platform-aware
+  option is wanted for the listing written back out on Windows.
