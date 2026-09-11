@@ -63,8 +63,14 @@ case "$MATRIX_NAME" in
       cat "$stage/lib/.native-libs-raw.txt" >&2
       exit 1
     fi
-    grep 'note: native-static-libs:' "$stage/lib/.native-libs-raw.txt" \
-      | sed 's/^note: native-static-libs: *//' > "$stage/lib/native-libs-windows.txt"
+    if ! grep -q 'native-static-libs:' "$stage/lib/.native-libs-raw.txt"; then
+      echo "package.sh: no 'native-static-libs:' note in cargo rustc output:" >&2
+      cat "$stage/lib/.native-libs-raw.txt" >&2
+      rm -f "$stage/lib/.native-libs-raw.txt"
+      exit 1
+    fi
+    grep 'native-static-libs:' "$stage/lib/.native-libs-raw.txt" \
+      | sed 's/^.*native-static-libs: *//' > "$stage/lib/native-libs-windows.txt"
     rm -f "$stage/lib/.native-libs-raw.txt"
     echo "native-libs-windows.txt: $(cat "$stage/lib/native-libs-windows.txt")"
     ;;
