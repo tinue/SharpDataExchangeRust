@@ -11,6 +11,17 @@ GitHub release notes, so keep entries user-facing.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-11
+
+### Fixed
+
+- `lib/native-libs-windows.txt` (added in 0.1.1) was corrupted by a stray ANSI
+  color-reset escape (`CARGO_TERM_COLOR=always` in CI coloring a note captured
+  from a redirected, non-tty stderr) and its doc comment wrongly described the
+  content as GCC `-lname` syntax; it's actually MSVC linker tokens (bare
+  `name.lib` filenames and the occasional `/defaultlib:x` flag). Packaging now
+  captures it with `CARGO_TERM_COLOR=never` and strips escapes defensively.
+
 ## [0.1.1] - 2026-09-11
 
 ### Added
@@ -73,6 +84,7 @@ GitHub release notes, so keep entries user-facing.
   it lower-case); `testsuite.md` marks those bytes "don't care". Payloads match
   the Java output exactly.
 
-[Unreleased]: https://github.com/tinue/SharpDataExchangeRust/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/tinue/SharpDataExchangeRust/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/tinue/SharpDataExchangeRust/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/tinue/SharpDataExchangeRust/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tinue/SharpDataExchangeRust/releases/tag/v0.1.0

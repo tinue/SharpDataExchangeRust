@@ -23,8 +23,10 @@
 #      in sync with its remote; branch fast-forward-merges into main; CHANGELOG.md
 #      has an entry for the current version.
 #
-#   3. Full release (squash-merge branch -> main, tag "vX.Y.Z" on main; CI
-#      publishes the real GitHub release; the "-pre" tag/release is deleted):
+#   3. Full release (squash-merge branch -> main, tag "vX.Y.Z" on main; promotes
+#      the "vX.Y.Z-pre" pre-release's already-built assets to the real GitHub
+#      release — no rebuild, CI is not re-triggered; the "-pre" tag/release is
+#      then deleted):
 #        bin/release --release
 #      Pre-conditions: not on main; working tree clean; a "vX.Y.Z-pre" GitHub
 #      pre-release exists for this version.
@@ -177,8 +179,24 @@ if $DO_RELEASE; then
     fi
 
     NOTES=$(changelog_notes)
-    COMMIT_MSG="Release $TAG"
-    [ -n "$NOTES" ] && COMMIT_MSG="${COMMIT_MSG}"$'\n\n'"${NOTES}"
+    [ -z "$NOTES" ] && NOTES="Release $TAG. See CHANGELOG.md."
+    COMMIT_MSG="Release $TAG"$'\n\n'"${NOTES}"
+    # The tag pushed below only matches "-pre" in release.yml's trigger, so it
+    # does not start a new build — the pre-release's assets are promoted as-is.
+    # This squash commit's own push to main would still fire CI's build + test
+    # + cross-build matrix on code the pre-release build already exercised, so
+    # skip it too.
+    COMMIT_MSG="${COMMIT_MSG}"$'\n\n''skip-ci: identical to the already-built pre-release'
+    COMMIT_MSG="${COMMIT_MSG}"$'\n''[skip ci]'
+
+    echo "Downloading ${PRE_TAG}'s already-built assets…"
+    DIST_DIR=$(mktemp -d)
+    run_cmd gh release download "$PRE_TAG" --dir "$DIST_DIR" --clobber
+    if ! $DRY_RUN && [ -z "$(ls -A "$DIST_DIR" 2>/dev/null)" ]; then
+        echo "Error: no assets found on pre-release ${PRE_TAG}."
+        rm -rf "$DIST_DIR"
+        exit 1
+    fi
 
     echo "Squash-merging $CURRENT_BRANCH into ${MAIN_BRANCH}…"
     run_cmd git fetch origin "$MAIN_BRANCH" --quiet
@@ -188,10 +206,19 @@ if $DO_RELEASE; then
     run_cmd git commit -m "$COMMIT_MSG"
     run_cmd git push origin "$MAIN_BRANCH"
 
-    echo "Tagging $TAG on $MAIN_BRANCH (triggers the release workflow)…"
+    echo "Tagging $TAG on $MAIN_BRANCH…"
     run_cmd git tag "$TAG"
     run_cmd git push origin "$TAG"
     run_cmd git checkout "$CURRENT_BRANCH"
+
+    NOTES_FILE=$(mktemp)
+    printf '%s\n' "$NOTES" > "$NOTES_FILE"
+    echo "Publishing release ${TAG} (promoting ${PRE_TAG}'s assets, no rebuild)…"
+    run_cmd gh release create "$TAG" "$DIST_DIR"/* \
+        --title "SharpDataExchange $VERSION" \
+        --notes-file "$NOTES_FILE"
+    rm -f "$NOTES_FILE"
+    rm -rf "$DIST_DIR"
 
     echo "Removing pre-release ${PRE_TAG}…"
     run_cmd gh release delete "$PRE_TAG" --yes --cleanup-tag
@@ -199,7 +226,7 @@ if $DO_RELEASE; then
     if $DRY_RUN; then
         echo "Done.  [dry-run] No changes made."
     else
-        echo "Done.  CI is building $TAG — watch it with:  gh run watch"
+        echo "Done.  Release ${TAG}: $(gh release view "${TAG}" --json url -q .url)"
     fi
     exit 0
 fi

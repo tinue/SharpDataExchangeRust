@@ -1,8 +1,14 @@
 name: Release
 
-# Triggered by pushing a tag:
-#   vX.Y.Z-pre   -> GitHub *pre-release* (disposable, re-runnable; see bin/release)
-#   vX.Y.Z       -> full GitHub release
+# Triggered by pushing a "vX.Y.Z-pre" tag: builds every platform and publishes
+# a GitHub *pre-release* (disposable, re-runnable; see bin/release).
+#
+# The real "vX.Y.Z" release is never built here: `bin/release --release`
+# promotes the pre-release's already-built assets to the real tag directly via
+# `gh release create`, without pushing a tag that would trigger this workflow
+# again — the pre-release build already is the release build. Use
+# workflow_dispatch with a real tag only to force a rebuild (e.g. recovering
+# from a botched promotion).
 #
 # Each platform job builds the `sde` CLI + the static and shared `libsharpdx`,
 # bundles them with include/ + docs into one archive, and uploads it. The final
@@ -18,12 +24,11 @@ name: Release
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-pre"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)build a release for, e.g. v0.1.0"
+        description: "Existing tag to (re)build a release for, e.g. v0.1.0 or v0.1.0-pre"
         required: true
 
 env:
