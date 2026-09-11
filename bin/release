@@ -206,7 +206,10 @@ if $DO_RELEASE; then
     run_cmd git commit -m "$COMMIT_MSG"
     run_cmd git push origin "$MAIN_BRANCH"
 
-    echo "Tagging $TAG on $MAIN_BRANCH…"
+    # Braced ${MAIN_BRANCH}, not $MAIN_BRANCH: this bash mis-parses a bare
+    # $VAR immediately followed by a multi-byte UTF-8 character (here "…") as
+    # part of the variable name, raising a spurious "unbound variable" error.
+    echo "Tagging $TAG on ${MAIN_BRANCH}…"
     run_cmd git tag "$TAG"
     run_cmd git push origin "$TAG"
     run_cmd git checkout "$CURRENT_BRANCH"
