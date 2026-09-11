@@ -44,6 +44,23 @@ case "$MATRIX_NAME" in
     # staticlib -> sharpdx.lib ; cdylib -> sharpdx.dll + import lib sharpdx.dll.lib
     cp "$rel"/*.lib "$stage/lib/"
     cp "$rel"/sharpdx.dll "$stage/lib/"
+
+    # Rust's std needs several Windows system import libs (sockets, CSPRNG
+    # seeding, futex-based sync, ...) that `cargo build` links into sde.exe
+    # automatically but a non-cargo consumer linking the raw sharpdx.lib
+    # must supply explicitly, or the link fails with unresolved externals
+    # like __imp_freeaddrinfo. Rather than have every such consumer
+    # hand-maintain a guessed list (which silently drifts as our own
+    # dependencies change), capture rustc's own authoritative answer for
+    # this exact build/target and ship it alongside the lib: a plain
+    # space-separated `-lname` list, GCC/rustc style, one line, no trailing
+    # newline weirdness to worry about on the consuming side.
+    cargo rustc --release --target "$primary" --lib -- --print=native-static-libs \
+      2> "$stage/lib/.native-libs-raw.txt"
+    grep 'note: native-static-libs:' "$stage/lib/.native-libs-raw.txt" \
+      | sed 's/^note: native-static-libs: *//' > "$stage/lib/native-libs-windows.txt"
+    rm -f "$stage/lib/.native-libs-raw.txt"
+    echo "native-libs-windows.txt: $(cat "$stage/lib/native-libs-windows.txt")"
     ;;
 
   *)
