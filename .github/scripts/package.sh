@@ -52,12 +52,19 @@ case "$MATRIX_NAME" in
     # like __imp_freeaddrinfo. Rather than have every such consumer
     # hand-maintain a guessed list (which silently drifts as our own
     # dependencies change), capture rustc's own authoritative answer for
-    # this exact build/target and ship it alongside the lib: a plain
-    # space-separated `-lname` list, GCC/rustc style, one line, no trailing
-    # newline weirdness to worry about on the consuming side.
+    # this exact build/target and ship it alongside the lib: on
+    # x86_64-pc-windows-msvc this is a space-separated list of MSVC linker
+    # tokens (bare `name.lib` filenames and the occasional `/defaultlib:x`
+    # flag) -- NOT the `-lname` GCC form that macOS/Linux would get, so a
+    # consumer needs to pass this to the linker as native link options, not
+    # treat each word as a plain library name.
     # --print=native-static-libs refuses to run when the target has multiple
     # crate-types (ours is rlib+staticlib+cdylib), so pin it to staticlib.
-    if ! cargo rustc --release --target "$primary" --lib --crate-type staticlib \
+    # CARGO_TERM_COLOR=never: the workflow sets `always` globally so its own
+    # build-step logs stay readable, but that also colors this note with
+    # ANSI escapes even though stderr here is redirected to a file, not a
+    # tty -- which would corrupt the captured list with a trailing "\e[0m".
+    if ! CARGO_TERM_COLOR=never cargo rustc --release --target "$primary" --lib --crate-type staticlib \
         -- --print=native-static-libs 2> "$stage/lib/.native-libs-raw.txt"; then
       echo "package.sh: cargo rustc --print=native-static-libs failed:" >&2
       cat "$stage/lib/.native-libs-raw.txt" >&2
@@ -69,8 +76,13 @@ case "$MATRIX_NAME" in
       rm -f "$stage/lib/.native-libs-raw.txt"
       exit 1
     fi
+    # Defense in depth: strip any ANSI escapes that still make it through
+    # regardless of CARGO_TERM_COLOR (e.g. a future cargo defaulting to
+    # `always` when it detects... whatever it detects), and collapse to one
+    # trimmed line.
     grep 'native-static-libs:' "$stage/lib/.native-libs-raw.txt" \
-      | sed 's/^.*native-static-libs: *//' > "$stage/lib/native-libs-windows.txt"
+      | sed -E 's/^.*native-static-libs: *//; s/\x1b\[[0-9;]*m//g' \
+      | tr -d '\r' | xargs > "$stage/lib/native-libs-windows.txt"
     rm -f "$stage/lib/.native-libs-raw.txt"
     echo "native-libs-windows.txt: $(cat "$stage/lib/native-libs-windows.txt")"
     ;;
