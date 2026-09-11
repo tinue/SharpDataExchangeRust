@@ -4,6 +4,7 @@
 use anyhow::{bail, Result};
 
 use crate::detect::{self, Content};
+use crate::detokenize::LineEnding;
 use crate::registry::{Device, Registry};
 use crate::{abbrev, detokenize, header, scanner, text};
 
@@ -26,11 +27,27 @@ pub struct ConvertOutcome {
 ///   `name` supplies the CE-158 filename.
 /// * Tokenized BASIC in (with a CE-158 / PC-1600 header) -> ASCII listing out. The
 ///   device is taken from the header; `device` and `name` are ignored.
+///
+/// A de-tokenized listing is terminated with the host-default line ending (`\r\n` on
+/// Windows, `\n` elsewhere); use [`convert_with`] to override it. `CR` / `CRLF` input to
+/// a tokenize is always accepted regardless of platform.
 pub fn convert(
     input: &[u8],
     device: Device,
     name: Option<&str>,
     with_header: bool,
+) -> Result<ConvertOutcome> {
+    convert_with(input, device, name, with_header, LineEnding::Platform)
+}
+
+/// As [`convert`], but with an explicit [`LineEnding`] for a de-tokenized listing.
+/// When tokenizing, `eol` is unused (`CR` / `CRLF` input is always accepted).
+pub fn convert_with(
+    input: &[u8],
+    device: Device,
+    name: Option<&str>,
+    with_header: bool,
+    eol: LineEnding,
 ) -> Result<ConvertOutcome> {
     let content = detect::detect(input);
     match content {
@@ -60,7 +77,7 @@ pub fn convert(
             let h = header::find(input).expect("detect() guarantees a header here");
             let payload = &input[h.payload_start()..];
             let reg = Registry::for_device(h.device);
-            let listing = detokenize::detokenize_to_text(payload, reg)?;
+            let listing = detokenize::detokenize_to_text(payload, reg, eol)?;
             Ok(ConvertOutcome { bytes: listing.into_bytes(), content, device: h.device })
         }
         Content::Unknown => bail!(
@@ -92,9 +109,27 @@ mod tests {
         assert_eq!(out.content, Content::AsciiBasic);
         assert_eq!(&out.bytes[0..5], &[0x01, 0x40, b'C', b'O', b'M']);
 
-        let back = convert(&out.bytes, Device::Pc1500, None, true).unwrap();
+        let back = convert_with(&out.bytes, Device::Pc1500, None, true, LineEnding::Lf).unwrap();
         assert_eq!(back.content, Content::Ce158Basic);
         assert_eq!(back.bytes, b"10 \"A\":CLEAR :WAIT\n20 GOTO 10\n");
+    }
+
+    #[test]
+    fn tokenize_accepts_cr_and_crlf_input_on_any_platform() {
+        let lf = convert(b"10 \"A\":WAIT\n20 GOTO 10\n", Device::Pc1500, Some("t"), true).unwrap();
+        let crlf = convert(b"10 \"A\":WAIT\r\n20 GOTO 10\r\n", Device::Pc1500, Some("t"), true).unwrap();
+        let cr = convert(b"10 \"A\":WAIT\r20 GOTO 10\r", Device::Pc1500, Some("t"), true).unwrap();
+        assert_eq!(lf.bytes, crlf.bytes, "CRLF input must tokenize identically to LF");
+        assert_eq!(lf.bytes, cr.bytes, "bare-CR input must tokenize identically to LF");
+    }
+
+    #[test]
+    fn detokenize_line_ending_is_overridable() {
+        let bbin = convert(b"10 GOTO 10\n20 END\n", Device::Pc1500, Some("t"), true).unwrap().bytes;
+        let crlf = convert_with(&bbin, Device::Pc1500, None, true, LineEnding::CrLf).unwrap();
+        assert_eq!(crlf.bytes, b"10 GOTO 10\r\n20 END\r\n");
+        let cr = convert_with(&bbin, Device::Pc1500, None, true, LineEnding::Cr).unwrap();
+        assert_eq!(cr.bytes, b"10 GOTO 10\r20 END\r");
     }
 
     #[test]

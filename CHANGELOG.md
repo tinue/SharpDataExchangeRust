@@ -11,6 +11,30 @@ GitHub release notes, so keep entries user-facing.
 
 ## [Unreleased]
 
+### Added
+
+- Platform-aware line endings for de-tokenized listings. The output now uses the
+  host convention by default — `CRLF` on Windows, `LF` on macOS / Linux — and the
+  terminator is overridable: `--eol auto|lf|crlf|cr` on the CLI,
+  `sharpdx::convert_with(.., LineEnding)` in the crate, and a new
+  `SdeLineEnding line_ending` argument on `sde_detokenize` / `sde_convert` in the
+  C ABI.
+- macOS releases are signed with a Developer ID and notarized (hardened runtime),
+  so they run without a Gatekeeper warning. The `sde` / `libsharpdx.dylib` in the
+  `.tar.gz` are notarized; a new **`SharpDataExchange-<version>.pkg`** installer is
+  published alongside it — signed, notarized, and stapled — with a choice between
+  an all-users install (`/usr/local/bin`) and a per-user one (`~/.local/bin`,
+  added to `~/.zshrc`).
+
+### Changed
+
+- Tokenizing now accepts `CR` and `CRLF` line endings in the input listing on
+  every platform (previously a real Windows `.bas` file with `CRLF` endings could
+  leave a stray `0x0D` in the payload).
+- **C ABI break:** `sde_detokenize` and `sde_convert` take an extra
+  `SdeLineEnding line_ending` parameter (pass `SDE_LINE_ENDING_PLATFORM` for the
+  previous-style host default). `sde_tokenize` is unchanged.
+
 ## [0.1.0] - 2026-09-08
 
 ### Added
@@ -28,7 +52,7 @@ GitHub release notes, so keep entries user-facing.
 - `sharpdx` Rust crate exposing the pure `convert` core.
 - Byte-parity test suite against the Java `SharpDataExchange` `convert` fixtures,
   plus round-trip and C-ABI tests.
-- Release archives for macOS (universal), Linux x86-64 / arm64, and Windows
+- Release archives for macOS (Apple Silicon), Linux x86-64 / arm64, and Windows
   x64 / arm64, each bundling the CLI, the static and shared libraries, and the
   `include/` directory.
 

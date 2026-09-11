@@ -52,7 +52,14 @@ fn detokenize_roundtrips_pc1600_fixture() {
     let mut out = ptr::null_mut();
     let mut out_len = 0usize;
     let rc = unsafe {
-        sde_detokenize(SdeDevice::Pc1600, data.as_ptr(), data.len(), &mut out, &mut out_len)
+        sde_detokenize(
+            SdeDevice::Pc1600,
+            data.as_ptr(),
+            data.len(),
+            SdeLineEnding::Platform,
+            &mut out,
+            &mut out_len,
+        )
     };
     assert_eq!(rc, SDE_OK, "err: {}", last_error());
     let listing = take_buf(out, out_len);
@@ -68,6 +75,7 @@ fn detokenize_roundtrips_pc1600_fixture() {
             name.as_ptr(),
             listing.as_ptr(),
             listing.len(),
+            SdeLineEnding::Platform,
             &mut b,
             &mut b_len,
             &mut kind,
@@ -106,6 +114,7 @@ fn headerless_blob_via_convert_is_an_error_with_message() {
             ptr::null(),
             blob.as_ptr(),
             blob.len(),
+            SdeLineEnding::Platform,
             &mut out,
             &mut out_len,
             &mut kind,
@@ -115,11 +124,32 @@ fn headerless_blob_via_convert_is_an_error_with_message() {
     assert!(!last_error().is_empty());
     // ...but sde_detokenize accepts it as a bare payload.
     let rc = unsafe {
-        sde_detokenize(SdeDevice::Pc1500, blob.as_ptr(), blob.len(), &mut out, &mut out_len)
+        sde_detokenize(
+            SdeDevice::Pc1500,
+            blob.as_ptr(),
+            blob.len(),
+            SdeLineEnding::Lf,
+            &mut out,
+            &mut out_len,
+        )
     };
     assert_eq!(rc, SDE_OK, "err: {}", last_error());
     let listing = take_buf(out, out_len);
     assert_eq!(listing, b"10 \"A\"WAIT 0\n");
+
+    // Same payload, explicit CRLF override.
+    let rc = unsafe {
+        sde_detokenize(
+            SdeDevice::Pc1500,
+            blob.as_ptr(),
+            blob.len(),
+            SdeLineEnding::CrLf,
+            &mut out,
+            &mut out_len,
+        )
+    };
+    assert_eq!(rc, SDE_OK, "err: {}", last_error());
+    assert_eq!(take_buf(out, out_len), b"10 \"A\"WAIT 0\r\n");
 }
 
 #[test]
@@ -128,7 +158,14 @@ fn malformed_payload_returns_error_not_panic() {
     let mut out = ptr::null_mut();
     let mut out_len = 0usize;
     let rc = unsafe {
-        sde_detokenize(SdeDevice::Pc1500, bad.as_ptr(), bad.len(), &mut out, &mut out_len)
+        sde_detokenize(
+            SdeDevice::Pc1500,
+            bad.as_ptr(),
+            bad.len(),
+            SdeLineEnding::Platform,
+            &mut out,
+            &mut out_len,
+        )
     };
     assert_eq!(rc, SDE_ERR);
     assert!(last_error().contains("malformed") || last_error().contains("length"));
@@ -155,7 +192,9 @@ fn header_is_current() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("include/sharpdx.h"),
     )
     .unwrap();
-    for sym in ["sde_tokenize", "sde_detokenize", "sde_convert", "sde_detect", "SdeDevice"] {
+    for sym in
+        ["sde_tokenize", "sde_detokenize", "sde_convert", "sde_detect", "SdeDevice", "SdeLineEnding"]
+    {
         assert!(h.contains(sym), "generated header missing {sym}");
     }
 }

@@ -13,6 +13,7 @@ use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::detect::Content;
+use crate::detokenize::LineEnding;
 use crate::registry::Device;
 
 pub const SDE_OK: i32 = 0;
@@ -36,6 +37,32 @@ pub enum SdeContent {
     AsciiBasic = 1,
     Ce158Basic = 2,
     Pc1600Basic = 3,
+}
+
+/// Line ending for a de-tokenized listing (`sde_detokenize` / `sde_convert`).
+/// Ignored when tokenizing — `CR` and `CRLF` input are always accepted.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum SdeLineEnding {
+    /// Host default: `\r\n` on Windows, `\n` elsewhere.
+    Platform = 0,
+    /// `\n` (LF).
+    Lf = 1,
+    /// `\r\n` (CRLF).
+    CrLf = 2,
+    /// `\r` (CR) — the PC-1500's own line terminator.
+    Cr = 3,
+}
+
+impl From<SdeLineEnding> for LineEnding {
+    fn from(e: SdeLineEnding) -> Self {
+        match e {
+            SdeLineEnding::Platform => LineEnding::Platform,
+            SdeLineEnding::Lf => LineEnding::Lf,
+            SdeLineEnding::CrLf => LineEnding::CrLf,
+            SdeLineEnding::Cr => LineEnding::Cr,
+        }
+    }
 }
 
 impl From<SdeDevice> for Device {
@@ -192,7 +219,8 @@ pub unsafe extern "C" fn sde_tokenize(
 }
 
 /// Tokenized bytes -> ASCII BASIC (UTF-8). Accepts a CE-158 / PC-1600 header (device
-/// then taken from it) or a bare payload (uses `device`).
+/// then taken from it) or a bare payload (uses `device`). `line_ending` sets the
+/// listing's line terminator (`SDE_LINE_ENDING_PLATFORM` = the host default).
 ///
 /// # Safety
 /// As `sde_tokenize`.
@@ -201,21 +229,23 @@ pub unsafe extern "C" fn sde_detokenize(
     device: SdeDevice,
     input: *const u8,
     in_len: usize,
+    line_ending: SdeLineEnding,
     out: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
     guard(|| {
         clear_error();
         let Some(data) = slice(input, in_len) else { return SDE_ERR_ARGS };
+        let eol: LineEnding = line_ending.into();
 
         let result = match crate::detect::detect(data) {
             Content::Ce158Basic | Content::Pc1600Basic => {
-                crate::convert::convert(data, device.into(), None, true).map(|o| o.bytes)
+                crate::convert::convert_with(data, device.into(), None, true, eol).map(|o| o.bytes)
             }
             _ => {
                 // Treat as a headerless payload with the caller's device.
                 let reg = crate::registry::Registry::for_device(device.into());
-                crate::detokenize::detokenize_to_text(data, reg).map(String::into_bytes)
+                crate::detokenize::detokenize_to_text(data, reg, eol).map(String::into_bytes)
             }
         };
         match result {
@@ -232,7 +262,9 @@ pub unsafe extern "C" fn sde_detokenize(
 }
 
 /// Content-driven convert (mirrors the CLI): picks direction from `in`. Writes
-/// `*out_kind` with the detected input kind when non-NULL.
+/// `*out_kind` with the detected input kind when non-NULL. `line_ending` sets the
+/// line terminator of a de-tokenized listing (`SDE_LINE_ENDING_PLATFORM` = the
+/// host default); it is ignored when the input is ASCII BASIC.
 ///
 /// # Safety
 /// As `sde_tokenize`; `out_kind` is NULL or writable.
@@ -242,6 +274,7 @@ pub unsafe extern "C" fn sde_convert(
     name: *const c_char,
     input: *const u8,
     in_len: usize,
+    line_ending: SdeLineEnding,
     out: *mut *mut u8,
     out_len: *mut usize,
     out_kind: *mut SdeContent,
@@ -250,7 +283,7 @@ pub unsafe extern "C" fn sde_convert(
         clear_error();
         let Some(data) = slice(input, in_len) else { return SDE_ERR_ARGS };
         let nm = opt_str(name);
-        match crate::convert::convert(data, device.into(), nm, true) {
+        match crate::convert::convert_with(data, device.into(), nm, true, line_ending.into()) {
             Ok(o) => {
                 if !out_kind.is_null() {
                     *out_kind = o.content.into();

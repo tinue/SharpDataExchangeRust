@@ -97,11 +97,51 @@ fn strip_one_trailing_space(mut s: String) -> String {
     s
 }
 
-/// Convenience: de-tokenize to a single UTF-8 string, `\n`-joined with a trailing `\n`.
-pub fn detokenize_to_text(payload: &[u8], reg: &Registry) -> Result<String> {
+/// Line terminator for a de-tokenized listing written back out as a host text file.
+///
+/// The PC-1500 itself terminates each program line with a bare `CR` (`0x0D`), but that
+/// is rarely wanted in a file on disk, so the default ([`LineEnding::Platform`]) follows
+/// the host: `\r\n` on Windows, `\n` elsewhere. Tokenizing always accepts `CR` *and*
+/// `CRLF` input regardless of platform, so a listing written with any variant round-trips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineEnding {
+    /// `\n` (LF) — Unix, macOS.
+    Lf,
+    /// `\r\n` (CRLF) — Windows / DOS.
+    CrLf,
+    /// `\r` (CR) — the PC-1500's own line terminator.
+    Cr,
+    /// Follow the host platform: `\r\n` on Windows, `\n` elsewhere. The default.
+    #[default]
+    Platform,
+}
+
+impl LineEnding {
+    /// The terminator string this variant emits, resolving [`LineEnding::Platform`] for
+    /// the current build target.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            LineEnding::Lf => "\n",
+            LineEnding::CrLf => "\r\n",
+            LineEnding::Cr => "\r",
+            LineEnding::Platform => {
+                if cfg!(windows) {
+                    "\r\n"
+                } else {
+                    "\n"
+                }
+            }
+        }
+    }
+}
+
+/// Convenience: de-tokenize to a single UTF-8 string, each line terminated by `eol`
+/// (a trailing terminator included). Pass [`LineEnding::Platform`] for the host default.
+pub fn detokenize_to_text(payload: &[u8], reg: &Registry, eol: LineEnding) -> Result<String> {
     let lines = detokenize(payload, reg)?;
-    let mut text = lines.join("\n");
-    text.push('\n');
+    let sep = eol.as_str();
+    let mut text = lines.join(sep);
+    text.push_str(sep);
     Ok(text)
 }
 
@@ -133,5 +173,20 @@ mod tests {
     #[test]
     fn bad_length_is_error() {
         assert!(detokenize(&[0x00, 0x0A, 0x40, 0x0D], registry::pc1500()).is_err());
+    }
+
+    #[test]
+    fn line_ending_override() {
+        let payload = [0x00u8, 0x0A, 0x01, 0x0D, 0x00, 0x14, 0x01, 0x0D];
+        let reg = registry::pc1500();
+        assert_eq!(detokenize_to_text(&payload, reg, LineEnding::Lf).unwrap(), "10\n20\n");
+        assert_eq!(detokenize_to_text(&payload, reg, LineEnding::CrLf).unwrap(), "10\r\n20\r\n");
+        assert_eq!(detokenize_to_text(&payload, reg, LineEnding::Cr).unwrap(), "10\r20\r");
+    }
+
+    #[test]
+    fn platform_line_ending_matches_target() {
+        let want = if cfg!(windows) { "\r\n" } else { "\n" };
+        assert_eq!(LineEnding::Platform.as_str(), want);
     }
 }

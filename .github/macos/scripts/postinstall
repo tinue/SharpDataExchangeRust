@@ -1,0 +1,52 @@
+#!/bin/sh
+#
+# postinstall for the SharpDataExchange `sde` .pkg installer.
+#
+# The payload is staged at  <target>/usr/local/lib/ch.erzberger.SharpDataExchange/sde .
+# macOS Installer runs this script as root for an "Install for all users" choice
+# and as the invoking user for "Install for me only" — that is how we tell the
+# two apart and pick the destination:
+#
+#   all users     -> /usr/local/bin/sde        (already on the default PATH)
+#   current user  -> ~/.local/bin/sde          (dir created, PATH added to ~/.zshrc)
+#
+# The staging tree is removed either way.
+
+set -eu
+
+REL="usr/local/lib/ch.erzberger.SharpDataExchange"
+BIN="sde"
+
+if [ "$(id -u)" -eq 0 ]; then
+    # ---- Install for all users ------------------------------------------------
+    src="/${REL}/${BIN}"
+    install -d -m 0755 /usr/local/bin
+    install -m 0755 "$src" "/usr/local/bin/${BIN}"
+    set +e
+    rm -rf "/${REL}"
+else
+    # ---- Install for the current user only ----------------------------------
+    src="${HOME}/${REL}/${BIN}"
+    install -d -m 0755 "${HOME}/.local/bin"
+    install -m 0755 "$src" "${HOME}/.local/bin/${BIN}"
+    set +e
+    rm -rf "${HOME}/${REL}"
+    rmdir -p "${HOME}/usr/local/lib" 2>/dev/null || true
+
+    # Ensure ~/.local/bin is on PATH via ~/.zshrc — guarded and idempotent.
+    zrc="${HOME}/.zshrc"
+    marker="# added by SharpDataExchange installer"
+    case ":${PATH}:" in
+        *":${HOME}/.local/bin:"*) : ;;  # already on PATH, nothing to do
+        *)
+            if [ ! -f "$zrc" ] || ! grep -qF "$marker" "$zrc"; then
+                {
+                    printf '\n%s\n' "$marker"
+                    printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"'
+                } >> "$zrc"
+            fi
+            ;;
+    esac
+fi
+
+exit 0

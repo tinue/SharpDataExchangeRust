@@ -23,8 +23,9 @@ pub mod paths;
 
 pub mod ffi;
 
-pub use convert::{convert, ConvertOutcome};
+pub use convert::{convert, convert_with, ConvertOutcome};
 pub use detect::Content;
+pub use detokenize::LineEnding;
 pub use registry::Device;
 
 /// Crate version string (`CARGO_PKG_VERSION`).

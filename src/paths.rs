@@ -7,14 +7,21 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::detect::Content;
+use crate::detokenize::LineEnding;
 use crate::registry::Device;
 
 const ASCII_EXT: &str = "bas";
 const TOKENIZED_EXT: &str = "bbin";
 
 /// Run one `convert`: read `infile`, convert, write the derived (or given) output file.
-/// Returns a one-line human summary.
-pub fn run_convert(infile: &str, outfile: Option<&str>, device: Device) -> Result<String> {
+/// Returns a one-line human summary. `eol` sets the line ending of a de-tokenized
+/// listing (ignored when tokenizing).
+pub fn run_convert(
+    infile: &str,
+    outfile: Option<&str>,
+    device: Device,
+    eol: LineEnding,
+) -> Result<String> {
     let in_path = append_bas_if_missing(infile);
     let raw = std::fs::read(&in_path)
         .with_context(|| format!("cannot read {}", in_path.display()))?;
@@ -35,7 +42,7 @@ pub fn run_convert(infile: &str, outfile: Option<&str>, device: Device) -> Resul
     };
 
     let name = in_path.file_stem().and_then(|s| s.to_str());
-    let outcome = crate::convert::convert(&raw, device, name, true)?;
+    let outcome = crate::convert::convert_with(&raw, device, name, true, eol)?;
     let out_path = derive_convert_output(outfile, &in_path, target_ext)?;
     std::fs::write(&out_path, &outcome.bytes)
         .with_context(|| format!("cannot write {}", out_path.display()))?;

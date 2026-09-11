@@ -13,18 +13,32 @@ Embedding this in your own application (C / C++ / Swift / Rust)? See
 
 ### From a release
 
-Download the archive for your platform from the
-[Releases](../../releases) page and put `bin/sde` somewhere on your `PATH`. Each
-archive also contains the C library and header (see `library.md`), the license,
-and this document.
+Download for your platform from the [Releases](../../releases) page. The
+`.tar.gz` / `.zip` archives hold `bin/sde` plus the C library and header (see
+`library.md`), the license, and this document — unpack and put `bin/sde` on your
+`PATH`.
 
-| archive | platform |
+| download | platform |
 |---|---|
-| `sharpdx-macos-universal.tar.gz` | macOS 12+ (Apple Silicon + Intel) |
+| `SharpDataExchange-<version>.pkg` | macOS 12+ (Apple Silicon) — graphical installer |
+| `sharpdx-macos-arm64.tar.gz` | macOS 12+ (Apple Silicon) — archive |
 | `sharpdx-linux-x86_64.tar.gz` | Linux x86-64 (glibc 2.35+) |
 | `sharpdx-linux-aarch64.tar.gz` | Linux arm64 (glibc 2.35+) |
 | `sharpdx-windows-x86_64.zip` | Windows 10+ x64 |
 | `sharpdx-windows-aarch64.zip` | Windows 11 arm64 |
+
+### On macOS
+
+Easiest: double-click **`SharpDataExchange-<version>.pkg`**. It is signed and
+notarized (no Gatekeeper warning) and asks whether to install:
+
+* **for all users** → `/usr/local/bin/sde` (already on `PATH`); or
+* **for me only** → `~/.local/bin/sde`, creating that directory and adding it to
+  `~/.zshrc` when needed — open a new terminal afterwards.
+
+Prefer to place the binary yourself: use `sharpdx-macos-arm64.tar.gz`. Its `sde`
+and `libsharpdx.dylib` are Developer-ID-signed and notarized (Gatekeeper verifies
+online on first run); the archive itself carries no stapled ticket.
 
 ### From source
 
@@ -60,6 +74,7 @@ cat myprog.bas | sde convert > myprog.bbin     # stdin -> stdout
 | option | meaning |
 |---|---|
 | `-d, --device pc1500\|pc1500a\|pc1600\|pc1600emul` | keyword table + header flavor when **tokenizing** (default `pc1500`). Ignored when de-tokenizing — the device is read from the input header. |
+| `--eol auto\|lf\|crlf\|cr` | line ending for the **de-tokenized** listing (default `auto` = CRLF on Windows, LF on macOS / Linux). Ignored when tokenizing — CR and CRLF input are always accepted. |
 | `-v, --verbose` | verbose logging |
 
 If `<outfile>` is omitted the result is written next to the input with the target

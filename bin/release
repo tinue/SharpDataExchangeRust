@@ -7,6 +7,10 @@
 # to push the tag that triggers that workflow — the workflow then builds every
 # platform and creates the GitHub release.
 #
+# The macOS job also Developer-ID-signs + notarizes the binaries and builds a
+# notarized, stapled .pkg installer; it needs the APPLE_* repo secrets described
+# in .github/macos-signing.md.
+#
 # Workflow:
 #
 #   1. Local build + test only (no git/GitHub interaction):
@@ -176,7 +180,7 @@ if $DO_RELEASE; then
     COMMIT_MSG="Release $TAG"
     [ -n "$NOTES" ] && COMMIT_MSG="${COMMIT_MSG}"$'\n\n'"${NOTES}"
 
-    echo "Squash-merging $CURRENT_BRANCH into $MAIN_BRANCH…"
+    echo "Squash-merging $CURRENT_BRANCH into ${MAIN_BRANCH}…"
     run_cmd git fetch origin "$MAIN_BRANCH" --quiet
     run_cmd git checkout "$MAIN_BRANCH"
     run_cmd git merge --ff-only "origin/$MAIN_BRANCH" || true
@@ -189,7 +193,7 @@ if $DO_RELEASE; then
     run_cmd git push origin "$TAG"
     run_cmd git checkout "$CURRENT_BRANCH"
 
-    echo "Removing pre-release $PRE_TAG…"
+    echo "Removing pre-release ${PRE_TAG}…"
     run_cmd gh release delete "$PRE_TAG" --yes --cleanup-tag
 
     if $DRY_RUN; then

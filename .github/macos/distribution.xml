@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  productbuild distribution for the `sde` .pkg installer.
+
+  `<domains enable_localSystem enable_currentUserHome>` is what makes Installer
+  show the "Install for all users of this computer" / "Install for me only" pane;
+  the postinstall script keys off whether it runs as root to place `sde` in
+  /usr/local/bin or ~/.local/bin.  __VERSION__ is substituted by
+  .github/scripts/macos-pkg.sh.
+-->
+<installer-gui-script minSpecVersion="2">
+    <title>SharpDataExchange</title>
+    <domains enable_localSystem="true" enable_currentUserHome="true"/>
+    <options customize="never" require-scripts="true" hostArchitectures="arm64"/>
+    <choices-outline>
+        <line choice="default"/>
+    </choices-outline>
+    <choice id="default" title="SharpDataExchange">
+        <pkg-ref id="ch.erzberger.SharpDataExchange"/>
+    </choice>
+    <pkg-ref id="ch.erzberger.SharpDataExchange"
+             version="__VERSION__"
+             onConclusion="none">component.pkg</pkg-ref>
+</installer-gui-script>

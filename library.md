@@ -36,8 +36,10 @@ sharpdx-<platform>/
 └── library.md
 ```
 
-The universal macOS archive's libraries and binary are `lipo` fat files
-(`arm64` + `x86_64`).
+The macOS archive is Apple Silicon (`arm64`) only; its `sde` and
+`libsharpdx.dylib` are signed with a Developer ID and notarized (hardened
+runtime). A signed, notarized, stapled `.pkg` installer is published alongside it
+— see the main [README](README.md#on-macos).
 
 ## C ABI contract
 
@@ -85,10 +87,12 @@ int32_t sde_tokenize(SdeDevice device, int with_header, const char *name,
 
 int32_t sde_detokenize(SdeDevice device,
                        const uint8_t *in, size_t in_len,
+                       SdeLineEnding line_ending,
                        uint8_t **out, size_t *out_len);
 
 int32_t sde_convert(SdeDevice device, const char *name,
                     const uint8_t *in, size_t in_len,
+                    SdeLineEnding line_ending,
                     uint8_t **out, size_t *out_len, SdeContent *out_kind);
 ```
 
@@ -105,6 +109,24 @@ int32_t sde_convert(SdeDevice device, const char *name,
 
 `SdeDevice` is `SDE_DEVICE_PC1500` (0) or `SDE_DEVICE_PC1600` (1). `SdeContent` is
 `UNKNOWN` / `ASCII_BASIC` / `CE158_BASIC` / `PC1600_BASIC`.
+
+### Line endings
+
+Tokenizing **always** accepts `CR` (`\r`) or `CRLF` (`\r\n`) line endings in the
+input listing, on any platform — they are normalized before the scanner runs.
+
+When de-tokenizing, `line_ending` chooses the terminator written into the
+listing:
+
+| `SdeLineEnding` | value | terminator |
+|---|---|---|
+| `SDE_LINE_ENDING_PLATFORM` | `0` | host default — `\r\n` on Windows, `\n` elsewhere |
+| `SDE_LINE_ENDING_LF` | `1` | `\n` |
+| `SDE_LINE_ENDING_CR_LF` | `2` | `\r\n` |
+| `SDE_LINE_ENDING_CR` | `3` | `\r` (the PC-1500's own line terminator) |
+
+Pass `SDE_LINE_ENDING_PLATFORM` for the default behaviour. It is ignored when the
+input is ASCII BASIC (i.e. when `sde_convert` tokenizes).
 
 ### C / C++ example
 
@@ -180,6 +202,11 @@ match outcome.content {
     _ => {}
 }
 ```
+
+`convert` writes a de-tokenized listing with the host-default line ending (`\r\n`
+on Windows, `\n` elsewhere); CR / CRLF input to a tokenize is always accepted.
+Use `convert_with(&input, device, name, with_header, LineEnding::CrLf)` (or
+`::Lf` / `::Cr` / `::Platform`) to force a specific terminator.
 
 `sharpdx::VERSION` is the crate version string. `sharpdx::ffi::*` is the same C
 ABI if you need it from Rust (the test suite exercises it that way).
