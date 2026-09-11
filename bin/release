@@ -179,6 +179,11 @@ if $DO_RELEASE; then
     NOTES=$(changelog_notes)
     COMMIT_MSG="Release $TAG"
     [ -n "$NOTES" ] && COMMIT_MSG="${COMMIT_MSG}"$'\n\n'"${NOTES}"
+    # [skip ci]: the tag push right below triggers the Release workflow, which
+    # already builds + tests every platform; without this, the plain push to
+    # main triggers CI's own build + cross-build matrix as a redundant second
+    # run of the same work.
+    COMMIT_MSG="${COMMIT_MSG}"$'\n\n'"[skip ci]"
 
     echo "Squash-merging $CURRENT_BRANCH into ${MAIN_BRANCH}…"
     run_cmd git fetch origin "$MAIN_BRANCH" --quiet
