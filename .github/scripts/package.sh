@@ -44,6 +44,35 @@ case "$MATRIX_NAME" in
     # staticlib -> sharpdx.lib ; cdylib -> sharpdx.dll + import lib sharpdx.dll.lib
     cp "$rel"/*.lib "$stage/lib/"
     cp "$rel"/sharpdx.dll "$stage/lib/"
+
+    # Rust's std needs several Windows system import libs (sockets, CSPRNG
+    # seeding, futex-based sync, ...) that `cargo build` links into sde.exe
+    # automatically but a non-cargo consumer linking the raw sharpdx.lib
+    # must supply explicitly, or the link fails with unresolved externals
+    # like __imp_freeaddrinfo. Rather than have every such consumer
+    # hand-maintain a guessed list (which silently drifts as our own
+    # dependencies change), capture rustc's own authoritative answer for
+    # this exact build/target and ship it alongside the lib: a plain
+    # space-separated `-lname` list, GCC/rustc style, one line, no trailing
+    # newline weirdness to worry about on the consuming side.
+    # --print=native-static-libs refuses to run when the target has multiple
+    # crate-types (ours is rlib+staticlib+cdylib), so pin it to staticlib.
+    if ! cargo rustc --release --target "$primary" --lib --crate-type staticlib \
+        -- --print=native-static-libs 2> "$stage/lib/.native-libs-raw.txt"; then
+      echo "package.sh: cargo rustc --print=native-static-libs failed:" >&2
+      cat "$stage/lib/.native-libs-raw.txt" >&2
+      exit 1
+    fi
+    if ! grep -q 'native-static-libs:' "$stage/lib/.native-libs-raw.txt"; then
+      echo "package.sh: no 'native-static-libs:' note in cargo rustc output:" >&2
+      cat "$stage/lib/.native-libs-raw.txt" >&2
+      rm -f "$stage/lib/.native-libs-raw.txt"
+      exit 1
+    fi
+    grep 'native-static-libs:' "$stage/lib/.native-libs-raw.txt" \
+      | sed 's/^.*native-static-libs: *//' > "$stage/lib/native-libs-windows.txt"
+    rm -f "$stage/lib/.native-libs-raw.txt"
+    echo "native-libs-windows.txt: $(cat "$stage/lib/native-libs-windows.txt")"
     ;;
 
   *)

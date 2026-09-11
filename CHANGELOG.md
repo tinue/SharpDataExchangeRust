@@ -11,8 +11,15 @@ GitHub release notes, so keep entries user-facing.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-11
+
 ### Added
 
+- Windows release archives now include `lib/native-libs-windows.txt`: the Windows
+  system import libs (`ws2_32`, `userenv`, `bcrypt`, ...) a non-cargo consumer
+  linking the raw `sharpdx.lib` needs to supply itself, captured straight from
+  `rustc --print=native-static-libs` for that build rather than left for every
+  downstream consumer to guess.
 - Platform-aware line endings for de-tokenized listings. The output now uses the
   host convention by default — `CRLF` on Windows, `LF` on macOS / Linux — and the
   terminator is overridable: `--eol auto|lf|crlf|cr` on the CLI,
@@ -66,5 +73,6 @@ GitHub release notes, so keep entries user-facing.
   it lower-case); `testsuite.md` marks those bytes "don't care". Payloads match
   the Java output exactly.
 
-[Unreleased]: https://github.com/OWNER/SharpDataExchangeRust/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/OWNER/SharpDataExchangeRust/releases/tag/v0.1.0
+[Unreleased]: https://github.com/tinue/SharpDataExchangeRust/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/tinue/SharpDataExchangeRust/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/tinue/SharpDataExchangeRust/releases/tag/v0.1.0
