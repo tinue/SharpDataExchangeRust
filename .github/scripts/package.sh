@@ -55,8 +55,14 @@ case "$MATRIX_NAME" in
     # this exact build/target and ship it alongside the lib: a plain
     # space-separated `-lname` list, GCC/rustc style, one line, no trailing
     # newline weirdness to worry about on the consuming side.
-    cargo rustc --release --target "$primary" --lib -- --print=native-static-libs \
-      2> "$stage/lib/.native-libs-raw.txt"
+    # --print=native-static-libs refuses to run when the target has multiple
+    # crate-types (ours is rlib+staticlib+cdylib), so pin it to staticlib.
+    if ! cargo rustc --release --target "$primary" --lib --crate-type staticlib \
+        -- --print=native-static-libs 2> "$stage/lib/.native-libs-raw.txt"; then
+      echo "package.sh: cargo rustc --print=native-static-libs failed:" >&2
+      cat "$stage/lib/.native-libs-raw.txt" >&2
+      exit 1
+    fi
     grep 'note: native-static-libs:' "$stage/lib/.native-libs-raw.txt" \
       | sed 's/^note: native-static-libs: *//' > "$stage/lib/native-libs-windows.txt"
     rm -f "$stage/lib/.native-libs-raw.txt"
